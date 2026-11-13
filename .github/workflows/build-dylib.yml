@@ -12,8 +12,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build arm64 dylib
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          REGISTRATION_KEY="$(openssl rand -hex 32)"
+          ARTIFACT_ID="$(gh api 'repos/${{ github.repository }}/actions/artifacts?name=ClientControl-dylib&per_page=1' --jq '.artifacts[0].id // empty')"
+          if [ -n "$ARTIFACT_ID" ]; then
+            gh api "repos/${{ github.repository }}/actions/artifacts/$ARTIFACT_ID/zip" > previous.zip
+            REGISTRATION_KEY="$(unzip -p previous.zip server-registration-key.txt)"
+          else
+            REGISTRATION_KEY="$(openssl rand -hex 32)"
+          fi
           printf '%s' "$REGISTRATION_KEY" > server-registration-key.txt
           SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
           xcrun --sdk iphoneos clang -fobjc-arc -dynamiclib -arch arm64 \
