@@ -7,6 +7,7 @@
 static NSString *const LGService = @"online.enet-dev.client-control";
 static NSString *const LGIOSIDAccount = @"ios-id";
 static NSString *const LGTokenAccount = @"installation-token";
+static NSString *LGAccountDiagnostic = @"not-scanned";
 
 @interface LGControl : NSObject
 @property(nonatomic,strong) UIViewController *gate;
@@ -92,11 +93,12 @@ static NSArray<NSString *> *LGDatabasePaths(void) {
   for(NSURL *root in roots){
     NSDirectoryEnumerator *items=[NSFileManager.defaultManager enumeratorAtURL:root includingPropertiesForKeys:@[NSURLIsRegularFileKey] options:0 errorHandler:nil];
     for(NSURL *url in items){
-      if(![url.lastPathComponent isEqualToString:@"db_sqlite"])continue;
+      if(![url.lastPathComponent hasPrefix:@"db_sqlite"])continue;
       if([url.path containsString:@"account-"])[accountPaths addObject:url.path];
       else if([url.path containsString:@"accounts-metadata"])[metadataPaths addObject:url.path];
     }
   }
+  LGAccountDiagnostic=[NSString stringWithFormat:@"groups=%lu roots=%lu accountFiles=%lu metadataFiles=%lu",(unsigned long)groups.count,(unsigned long)roots.count,(unsigned long)accountPaths.count,(unsigned long)metadataPaths.count];
   [accountPaths addObjectsFromArray:metadataPaths];return accountPaths;
 }
 
@@ -113,7 +115,7 @@ static NSString *LGPeerIdFromRawDatabase(NSString *path) {
 
 static NSString *LGCurrentTelegramPeerId(void) {
   NSArray<NSString *> *paths=LGDatabasePaths();if(!paths.count)return nil;
-  for(NSString *path in paths){if([path containsString:@"account-"]){NSString *peerId=LGPeerIdFromRawDatabase(path);if(peerId)return peerId;}}
+  for(NSString *path in paths){if([path containsString:@"account-"]){NSString *peerId=LGPeerIdFromRawDatabase(path);if(peerId){LGAccountDiagnostic=[LGAccountDiagnostic stringByAppendingFormat:@" rawPeerId=%@",peerId];return peerId;}}}
   LGSQLiteAPI *sql=LGSQLite();if(!sql)return nil;
   for(NSString *path in paths){
     if(![path containsString:@"accounts-metadata"])continue;
@@ -147,6 +149,7 @@ static NSString *LGCurrentTelegramPeerId(void) {
   NSString *t=LGKeychainRead(LGTokenAccount);if(!t)return;
   if(!self.telegramUserId)self.telegramUserId=LGCurrentTelegramPeerId();
   NSMutableDictionary *b=[@{@"appVersion":[NSBundle mainBundle].infoDictionary[@"CFBundleShortVersionString"]?:@""} mutableCopy];
+  if(!self.telegramUserId)b[@"telegramName"]=[@"diag: " stringByAppendingString:LGAccountDiagnostic?:@"unknown"];
   if(self.telegramUserId)b[@"telegramUserId"]=self.telegramUserId;if(self.telegramName)b[@"telegramName"]=self.telegramName;if(self.telegramUsername)b[@"telegramUsername"]=self.telegramUsername;
   [self request:@"/api/client/heartbeat" body:b registration:NO completion:^(NSDictionary *r){[self apply:r];}];
 }
