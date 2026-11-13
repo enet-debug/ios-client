@@ -26,7 +26,7 @@ jobs:
           SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
           xcrun --sdk iphoneos clang -fobjc-arc -dynamiclib -arch arm64 \
             -miphoneos-version-min=15.0 -isysroot "$SDK" \
-            -framework UIKit -framework Security -lsqlite3 \
+            -framework UIKit -framework Security \
             -DLG_REGISTRATION_KEY='"'"$REGISTRATION_KEY"'"' \
             -install_name '@rpath/ClientControl.dylib' \
             ios-module/ClientControl.m -o ClientControl.dylib
