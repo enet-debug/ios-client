@@ -66,29 +66,66 @@ static LGSQLiteAPI *LGSQLite(void) {
   return ready?&api:NULL;
 }
 
-static NSString *LGAccountsDatabasePath(void) {
+static NSArray<NSString *> *LGApplicationGroups(void) {
+  typedef CFTypeRef (*CreateTaskFn)(CFAllocatorRef);
+  typedef CFTypeRef (*CopyEntitlementFn)(CFTypeRef,CFStringRef,CFErrorRef *);
+  CreateTaskFn createTask=dlsym(RTLD_DEFAULT,"SecTaskCreateFromSelf");
+  CopyEntitlementFn copyEntitlement=dlsym(RTLD_DEFAULT,"SecTaskCopyValueForEntitlement");
+  if(!createTask||!copyEntitlement)return @[];
+  CFTypeRef task=createTask(kCFAllocatorDefault);if(!task)return @[];
+  CFTypeRef value=copyEntitlement(task,CFSTR("com.apple.security.application-groups"),NULL);CFRelease(task);
+  if(!value)return @[];
+  id groups=CFBridgingRelease(value);return [groups isKindOfClass:NSArray.class]?groups:@[];
+}
+
+static NSArray<NSString *> *LGDatabasePaths(void) {
   NSMutableArray<NSURL *> *roots=[NSMutableArray arrayWithObject:[NSURL fileURLWithPath:NSHomeDirectory() isDirectory:YES]];
-  NSURL *group=[NSFileManager.defaultManager containerURLForSecurityApplicationGroupIdentifier:@"group.ph.telegra.Telegraph"];
-  if(group)[roots addObject:group];
+  NSMutableSet<NSString *> *seenRoots=[NSMutableSet setWithObject:NSHomeDirectory()];
+  NSMutableArray<NSString *> *groups=[LGApplicationGroups() mutableCopy];
+  if(![groups containsObject:@"group.ph.telegra.Telegraph"])[groups addObject:@"group.ph.telegra.Telegraph"];
+  for(NSString *identifier in groups){
+    if(![identifier isKindOfClass:NSString.class])continue;
+    NSURL *url=[NSFileManager.defaultManager containerURLForSecurityApplicationGroupIdentifier:identifier];
+    if(url.path.length&&![seenRoots containsObject:url.path]){[seenRoots addObject:url.path];[roots addObject:url];}
+  }
+  NSMutableArray<NSString *> *accountPaths=[NSMutableArray array];NSMutableArray<NSString *> *metadataPaths=[NSMutableArray array];
   for(NSURL *root in roots){
-    NSDirectoryEnumerator *items=[NSFileManager.defaultManager enumeratorAtURL:root includingPropertiesForKeys:@[NSURLIsRegularFileKey] options:NSDirectoryEnumerationSkipsHiddenFiles errorHandler:nil];
+    NSDirectoryEnumerator *items=[NSFileManager.defaultManager enumeratorAtURL:root includingPropertiesForKeys:@[NSURLIsRegularFileKey] options:0 errorHandler:nil];
     for(NSURL *url in items){
-      if([url.lastPathComponent isEqualToString:@"db_sqlite"]&&[url.path containsString:@"accounts-metadata"])return url.path;
+      if(![url.lastPathComponent isEqualToString:@"db_sqlite"])continue;
+      if([url.path containsString:@"account-"])[accountPaths addObject:url.path];
+      else if([url.path containsString:@"accounts-metadata"])[metadataPaths addObject:url.path];
     }
+  }
+  [accountPaths addObjectsFromArray:metadataPaths];return accountPaths;
+}
+
+static NSString *LGPeerIdFromRawDatabase(NSString *path) {
+  NSData *data=[NSData dataWithContentsOfFile:path options:NSDataReadingMappedIfSafe error:nil];if(!data.length)return nil;
+  const unsigned char marker[]={6,'p','e','e','r','I','d',1};const unsigned char *bytes=data.bytes;
+  for(NSUInteger i=0;i+sizeof(marker)+8<=data.length;i++){
+    if(memcmp(bytes+i,marker,sizeof(marker))!=0)continue;
+    int64_t peerId=0;memcpy(&peerId,bytes+i+sizeof(marker),8);
+    if(peerId>0)return [NSString stringWithFormat:@"%lld",peerId];
   }
   return nil;
 }
 
 static NSString *LGCurrentTelegramPeerId(void) {
-  NSString *path=LGAccountsDatabasePath();if(!path)return nil;
+  NSArray<NSString *> *paths=LGDatabasePaths();if(!paths.count)return nil;
+  for(NSString *path in paths){if([path containsString:@"account-"]){NSString *peerId=LGPeerIdFromRawDatabase(path);if(peerId)return peerId;}}
   LGSQLiteAPI *sql=LGSQLite();if(!sql)return nil;
-  sqlite3 *db=NULL;if(sql->open_v2(path.UTF8String,&db,SQLITE_OPEN_READONLY|SQLITE_OPEN_NOMUTEX,NULL)!=SQLITE_OK){if(db)sql->close(db);return nil;}
-  sqlite3_stmt *statement=NULL;int64_t recordId=0;
-  if(sql->prepare_v2(db,"SELECT value FROM t0 WHERE key=0",-1,&statement,NULL)==SQLITE_OK&&sql->step(statement)==SQLITE_ROW){const void *bytes=sql->column_blob(statement,0);int length=sql->column_bytes(statement,0);if(bytes&&length>=8)memcpy(&recordId,bytes,8);}sql->finalize(statement);
-  if(!recordId){sql->close(db);return nil;}
-  const unsigned char marker[]={6,'p','e','e','r','I','d',1};int64_t peerId=0;
-  if(sql->prepare_v2(db,"SELECT value FROM t1 WHERE key=?",-1,&statement,NULL)==SQLITE_OK){sql->bind_int64(statement,1,recordId);if(sql->step(statement)==SQLITE_ROW){const unsigned char *bytes=sql->column_blob(statement,0);int length=sql->column_bytes(statement,0);for(int i=0;bytes&&i+16<=length;i++){if(memcmp(bytes+i,marker,sizeof(marker))==0){memcpy(&peerId,bytes+i+sizeof(marker),8);break;}}}}sql->finalize(statement);sql->close(db);
-  return peerId?[NSString stringWithFormat:@"%lld",peerId]:nil;
+  for(NSString *path in paths){
+    if(![path containsString:@"accounts-metadata"])continue;
+    sqlite3 *db=NULL;if(sql->open_v2(path.UTF8String,&db,SQLITE_OPEN_READONLY|SQLITE_OPEN_NOMUTEX,NULL)!=SQLITE_OK){if(db)sql->close(db);continue;}
+    sqlite3_stmt *statement=NULL;int64_t recordId=0;
+    if(sql->prepare_v2(db,"SELECT value FROM t0 WHERE key=0",-1,&statement,NULL)==SQLITE_OK&&sql->step(statement)==SQLITE_ROW){const void *bytes=sql->column_blob(statement,0);int length=sql->column_bytes(statement,0);if(bytes&&length>=8)memcpy(&recordId,bytes,8);}sql->finalize(statement);
+    if(!recordId){sql->close(db);continue;}
+    const unsigned char marker[]={6,'p','e','e','r','I','d',1};int64_t peerId=0;
+    if(sql->prepare_v2(db,"SELECT value FROM t1 WHERE key=?",-1,&statement,NULL)==SQLITE_OK){sql->bind_int64(statement,1,recordId);if(sql->step(statement)==SQLITE_ROW){const unsigned char *bytes=sql->column_blob(statement,0);int length=sql->column_bytes(statement,0);for(int i=0;bytes&&i+16<=length;i++){if(memcmp(bytes+i,marker,sizeof(marker))==0){memcpy(&peerId,bytes+i+sizeof(marker),8);break;}}}}sql->finalize(statement);sql->close(db);
+    if(peerId>0)return [NSString stringWithFormat:@"%lld",peerId];
+  }
+  return nil;
 }
 
 @implementation LGControl
