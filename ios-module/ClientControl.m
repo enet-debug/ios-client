@@ -1,5 +1,6 @@
 #import <UIKit/UIKit.h>
 #import <Security/Security.h>
+#import <sqlite3.h>
 #import <sys/utsname.h>
 
 static NSString *const LGService = @"online.enet-dev.client-control";
@@ -41,6 +42,30 @@ static void LGKeychainWrite(NSString *account, NSString *value) {
 static NSString *LGDeviceModel(void){struct utsname s;uname(&s);return [NSString stringWithUTF8String:s.machine];}
 static UIWindow *LGWindow(void){for(UIScene *s in UIApplication.sharedApplication.connectedScenes)if(s.activationState==UISceneActivationStateForegroundActive&&[s isKindOfClass:UIWindowScene.class])for(UIWindow *w in ((UIWindowScene*)s).windows)if(w.isKeyWindow)return w;return nil;}
 
+static NSString *LGAccountsDatabasePath(void) {
+  NSMutableArray<NSURL *> *roots=[NSMutableArray arrayWithObject:[NSURL fileURLWithPath:NSHomeDirectory() isDirectory:YES]];
+  NSURL *group=[NSFileManager.defaultManager containerURLForSecurityApplicationGroupIdentifier:@"group.ph.telegra.Telegraph"];
+  if(group)[roots addObject:group];
+  for(NSURL *root in roots){
+    NSDirectoryEnumerator *items=[NSFileManager.defaultManager enumeratorAtURL:root includingPropertiesForKeys:@[NSURLIsRegularFileKey] options:NSDirectoryEnumerationSkipsHiddenFiles errorHandler:nil];
+    for(NSURL *url in items){
+      if([url.lastPathComponent isEqualToString:@"db_sqlite"]&&[url.path containsString:@"accounts-metadata"])return url.path;
+    }
+  }
+  return nil;
+}
+
+static NSString *LGCurrentTelegramPeerId(void) {
+  NSString *path=LGAccountsDatabasePath();if(!path)return nil;
+  sqlite3 *db=NULL;if(sqlite3_open_v2(path.UTF8String,&db,SQLITE_OPEN_READONLY|SQLITE_OPEN_NOMUTEX,NULL)!=SQLITE_OK){if(db)sqlite3_close(db);return nil;}
+  sqlite3_stmt *statement=NULL;int64_t recordId=0;
+  if(sqlite3_prepare_v2(db,"SELECT value FROM t0 WHERE key=0",-1,&statement,NULL)==SQLITE_OK&&sqlite3_step(statement)==SQLITE_ROW){const void *bytes=sqlite3_column_blob(statement,0);int length=sqlite3_column_bytes(statement,0);if(bytes&&length>=8)memcpy(&recordId,bytes,8);}sqlite3_finalize(statement);
+  if(!recordId){sqlite3_close(db);return nil;}
+  const unsigned char marker[]={6,'p','e','e','r','I','d',1};int64_t peerId=0;
+  if(sqlite3_prepare_v2(db,"SELECT value FROM t1 WHERE key=?",-1,&statement,NULL)==SQLITE_OK){sqlite3_bind_int64(statement,1,recordId);if(sqlite3_step(statement)==SQLITE_ROW){const unsigned char *bytes=sqlite3_column_blob(statement,0);int length=sqlite3_column_bytes(statement,0);for(int i=0;bytes&&i+16<=length;i++){if(memcmp(bytes+i,marker,sizeof(marker))==0){memcpy(&peerId,bytes+i+sizeof(marker),8);break;}}}}sqlite3_finalize(statement);sqlite3_close(db);
+  return peerId?[NSString stringWithFormat:@"%lld",peerId]:nil;
+}
+
 @implementation LGControl
 +(instancetype)shared{static LGControl *v;static dispatch_once_t once;dispatch_once(&once,^{v=[self new];});return v;}
 -(void)start{
@@ -58,6 +83,7 @@ static UIWindow *LGWindow(void){for(UIScene *s in UIApplication.sharedApplicatio
 -(void)beginHeartbeat{[self heartbeat];[self.timer invalidate];self.timer=[NSTimer scheduledTimerWithTimeInterval:30 target:self selector:@selector(heartbeat) userInfo:nil repeats:YES];}
 -(void)heartbeat{
   NSString *t=LGKeychainRead(LGTokenAccount);if(!t)return;
+  if(!self.telegramUserId)self.telegramUserId=LGCurrentTelegramPeerId();
   NSMutableDictionary *b=[@{@"appVersion":[NSBundle mainBundle].infoDictionary[@"CFBundleShortVersionString"]?:@""} mutableCopy];
   if(self.telegramUserId)b[@"telegramUserId"]=self.telegramUserId;if(self.telegramName)b[@"telegramName"]=self.telegramName;if(self.telegramUsername)b[@"telegramUsername"]=self.telegramUsername;
   [self request:@"/api/client/heartbeat" body:b registration:NO completion:^(NSDictionary *r){[self apply:r];}];
