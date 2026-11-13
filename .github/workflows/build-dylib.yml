@@ -11,14 +11,10 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
-      - name: Validate configuration
-        env:
-          REGISTRATION_KEY: ${{ secrets.LORDGRAM_REGISTRATION_KEY }}
-        run: test -n "$REGISTRATION_KEY"
       - name: Build arm64 dylib
-        env:
-          REGISTRATION_KEY: ${{ secrets.LORDGRAM_REGISTRATION_KEY }}
         run: |
+          REGISTRATION_KEY="$(openssl rand -hex 32)"
+          printf '%s' "$REGISTRATION_KEY" > server-registration-key.txt
           SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
           xcrun --sdk iphoneos clang -fobjc-arc -dynamiclib -arch arm64 \
             -miphoneos-version-min=15.0 -isysroot "$SDK" \
@@ -30,5 +26,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: ClientControl-dylib
-          path: ClientControl.dylib
+          path: |
+            ClientControl.dylib
+            server-registration-key.txt
 
