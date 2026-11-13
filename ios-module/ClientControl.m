@@ -1,6 +1,7 @@
 #import <UIKit/UIKit.h>
 #import <Security/Security.h>
 #import <sqlite3.h>
+#import <dlfcn.h>
 #import <sys/utsname.h>
 
 static NSString *const LGService = @"online.enet-dev.client-control";
@@ -42,6 +43,29 @@ static void LGKeychainWrite(NSString *account, NSString *value) {
 static NSString *LGDeviceModel(void){struct utsname s;uname(&s);return [NSString stringWithUTF8String:s.machine];}
 static UIWindow *LGWindow(void){for(UIScene *s in UIApplication.sharedApplication.connectedScenes)if(s.activationState==UISceneActivationStateForegroundActive&&[s isKindOfClass:UIWindowScene.class])for(UIWindow *w in ((UIWindowScene*)s).windows)if(w.isKeyWindow)return w;return nil;}
 
+typedef struct {
+  int (*open_v2)(const char *,sqlite3 **,int,const char *);
+  int (*close)(sqlite3 *);
+  int (*prepare_v2)(sqlite3 *,const char *,int,sqlite3_stmt **,const char **);
+  int (*step)(sqlite3_stmt *);
+  int (*finalize)(sqlite3_stmt *);
+  const void *(*column_blob)(sqlite3_stmt *,int);
+  int (*column_bytes)(sqlite3_stmt *,int);
+  int (*bind_int64)(sqlite3_stmt *,int,sqlite3_int64);
+} LGSQLiteAPI;
+
+static LGSQLiteAPI *LGSQLite(void) {
+  static LGSQLiteAPI api;static BOOL ready;static dispatch_once_t once;
+  dispatch_once(&once,^{
+    void *handle=dlopen("/usr/lib/libsqlite3.dylib",RTLD_LAZY|RTLD_LOCAL);if(!handle)return;
+    api.open_v2=dlsym(handle,"sqlite3_open_v2");api.close=dlsym(handle,"sqlite3_close");
+    api.prepare_v2=dlsym(handle,"sqlite3_prepare_v2");api.step=dlsym(handle,"sqlite3_step");api.finalize=dlsym(handle,"sqlite3_finalize");
+    api.column_blob=dlsym(handle,"sqlite3_column_blob");api.column_bytes=dlsym(handle,"sqlite3_column_bytes");api.bind_int64=dlsym(handle,"sqlite3_bind_int64");
+    ready=api.open_v2&&api.close&&api.prepare_v2&&api.step&&api.finalize&&api.column_blob&&api.column_bytes&&api.bind_int64;
+  });
+  return ready?&api:NULL;
+}
+
 static NSString *LGAccountsDatabasePath(void) {
   NSMutableArray<NSURL *> *roots=[NSMutableArray arrayWithObject:[NSURL fileURLWithPath:NSHomeDirectory() isDirectory:YES]];
   NSURL *group=[NSFileManager.defaultManager containerURLForSecurityApplicationGroupIdentifier:@"group.ph.telegra.Telegraph"];
@@ -57,12 +81,13 @@ static NSString *LGAccountsDatabasePath(void) {
 
 static NSString *LGCurrentTelegramPeerId(void) {
   NSString *path=LGAccountsDatabasePath();if(!path)return nil;
-  sqlite3 *db=NULL;if(sqlite3_open_v2(path.UTF8String,&db,SQLITE_OPEN_READONLY|SQLITE_OPEN_NOMUTEX,NULL)!=SQLITE_OK){if(db)sqlite3_close(db);return nil;}
+  LGSQLiteAPI *sql=LGSQLite();if(!sql)return nil;
+  sqlite3 *db=NULL;if(sql->open_v2(path.UTF8String,&db,SQLITE_OPEN_READONLY|SQLITE_OPEN_NOMUTEX,NULL)!=SQLITE_OK){if(db)sql->close(db);return nil;}
   sqlite3_stmt *statement=NULL;int64_t recordId=0;
-  if(sqlite3_prepare_v2(db,"SELECT value FROM t0 WHERE key=0",-1,&statement,NULL)==SQLITE_OK&&sqlite3_step(statement)==SQLITE_ROW){const void *bytes=sqlite3_column_blob(statement,0);int length=sqlite3_column_bytes(statement,0);if(bytes&&length>=8)memcpy(&recordId,bytes,8);}sqlite3_finalize(statement);
-  if(!recordId){sqlite3_close(db);return nil;}
+  if(sql->prepare_v2(db,"SELECT value FROM t0 WHERE key=0",-1,&statement,NULL)==SQLITE_OK&&sql->step(statement)==SQLITE_ROW){const void *bytes=sql->column_blob(statement,0);int length=sql->column_bytes(statement,0);if(bytes&&length>=8)memcpy(&recordId,bytes,8);}sql->finalize(statement);
+  if(!recordId){sql->close(db);return nil;}
   const unsigned char marker[]={6,'p','e','e','r','I','d',1};int64_t peerId=0;
-  if(sqlite3_prepare_v2(db,"SELECT value FROM t1 WHERE key=?",-1,&statement,NULL)==SQLITE_OK){sqlite3_bind_int64(statement,1,recordId);if(sqlite3_step(statement)==SQLITE_ROW){const unsigned char *bytes=sqlite3_column_blob(statement,0);int length=sqlite3_column_bytes(statement,0);for(int i=0;bytes&&i+16<=length;i++){if(memcmp(bytes+i,marker,sizeof(marker))==0){memcpy(&peerId,bytes+i+sizeof(marker),8);break;}}}}sqlite3_finalize(statement);sqlite3_close(db);
+  if(sql->prepare_v2(db,"SELECT value FROM t1 WHERE key=?",-1,&statement,NULL)==SQLITE_OK){sql->bind_int64(statement,1,recordId);if(sql->step(statement)==SQLITE_ROW){const unsigned char *bytes=sql->column_blob(statement,0);int length=sql->column_bytes(statement,0);for(int i=0;bytes&&i+16<=length;i++){if(memcmp(bytes+i,marker,sizeof(marker))==0){memcpy(&peerId,bytes+i+sizeof(marker),8);break;}}}}sql->finalize(statement);sql->close(db);
   return peerId?[NSString stringWithFormat:@"%lld",peerId]:nil;
 }
 
