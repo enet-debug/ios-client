@@ -1,0 +1,34 @@
+name: Build ClientControl dylib
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'ios-module/**'
+      - '.github/workflows/build-dylib.yml'
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate configuration
+        env:
+          REGISTRATION_KEY: ${{ secrets.LORDGRAM_REGISTRATION_KEY }}
+        run: test -n "$REGISTRATION_KEY"
+      - name: Build arm64 dylib
+        env:
+          REGISTRATION_KEY: ${{ secrets.LORDGRAM_REGISTRATION_KEY }}
+        run: |
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          xcrun --sdk iphoneos clang -fobjc-arc -dynamiclib -arch arm64 \
+            -miphoneos-version-min=15.0 -isysroot "$SDK" \
+            -framework UIKit -framework Security \
+            -DLG_REGISTRATION_KEY='"'"$REGISTRATION_KEY"'"' \
+            -install_name '@rpath/ClientControl.dylib' \
+            ios-module/ClientControl.m -o ClientControl.dylib
+          file ClientControl.dylib
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ClientControl-dylib
+          path: ClientControl.dylib
+
