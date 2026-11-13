@@ -149,8 +149,8 @@ static NSString *LGCurrentTelegramPeerId(void) {
   NSString *t=LGKeychainRead(LGTokenAccount);if(!t)return;
   if(!self.telegramUserId)self.telegramUserId=LGCurrentTelegramPeerId();
   NSMutableDictionary *b=[@{@"appVersion":[NSBundle mainBundle].infoDictionary[@"CFBundleShortVersionString"]?:@""} mutableCopy];
-  if(!self.telegramUserId)b[@"telegramName"]=[@"diag: " stringByAppendingString:LGAccountDiagnostic?:@"unknown"];
-  if(self.telegramUserId)b[@"telegramUserId"]=self.telegramUserId;if(self.telegramName)b[@"telegramName"]=self.telegramName;if(self.telegramUsername)b[@"telegramUsername"]=self.telegramUsername;
+  if(self.telegramUserId){b[@"telegramUserId"]=self.telegramUserId;b[@"telegramName"]=self.telegramName?:@"";}
+  if(self.telegramUsername)b[@"telegramUsername"]=self.telegramUsername;
   [self request:@"/api/client/heartbeat" body:b registration:NO completion:^(NSDictionary *r){[self apply:r];}];
 }
 -(void)request:(NSString*)endpoint body:(NSDictionary*)body registration:(BOOL)registration completion:(void(^)(NSDictionary*))completion{
