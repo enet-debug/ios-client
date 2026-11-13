@@ -86,9 +86,8 @@ static UIWindow *LGWindow(void){for(UIScene *s in UIApplication.sharedApplicatio
 void LGUpdateTelegramUser(NSString *userId, NSString *name, NSString *username){LGControl *c=LGControl.shared;c.telegramUserId=userId;c.telegramName=name;c.telegramUsername=username;[c heartbeat];}
 
 __attribute__((constructor)) static void LGControlLoad(void) {
-  dispatch_async(dispatch_get_main_queue(), ^{
-    if (UIApplication.sharedApplication.applicationState != UIApplicationStateInactive) [LGControl.shared start];
-    else [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidFinishLaunchingNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(__unused NSNotification *n){ [LGControl.shared start]; }];
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+    [LGControl.shared start];
   });
 }
 
